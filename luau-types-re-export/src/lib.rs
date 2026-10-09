@@ -1,4 +1,4 @@
-use std::iter;
+use std::{collections::HashSet, iter};
 
 use full_moon::{
     ast::{
@@ -86,12 +86,13 @@ impl CollectTypeExports {
 
 fn remove_generics_foreign_default(
     generic_parameters: Punctuated<GenericDeclarationParameter>,
+    accessible_types: &HashSet<String>,
 ) -> Punctuated<full_moon::ast::luau::GenericDeclarationParameter> {
     let new_generics = generic_parameters
         .into_pairs()
         .map(|mut generic_parameter| {
             if let Some(default_generic_parameter) = generic_parameter.value_mut().default_type() {
-                if has_private_type(default_generic_parameter) {
+                if has_private_type(default_generic_parameter, accessible_types) {
                     let new_value = generic_parameter.value().clone().with_default(None);
 
                     *generic_parameter.value_mut() = new_value;
@@ -104,7 +105,7 @@ fn remove_generics_foreign_default(
 }
 
 // make a best effort at keeping types which can re-export easily
-fn has_private_type(type_info: &TypeInfo) -> bool {
+fn has_private_type(type_info: &TypeInfo, accessible_types: &HashSet<String>) -> bool {
     let mut check_types = vec![type_info];
 
     while let Some(current) = check_types.pop() {
@@ -113,8 +114,10 @@ fn has_private_type(type_info: &TypeInfo) -> bool {
                 check_types.push(type_info);
             }
             TypeInfo::Basic(token_reference) => {
-                if let Some(value) = is_standard_type(token_reference) {
-                    return value;
+                if is_standard_type(token_reference).is_some()
+                    && !accessible_types.contains(&token_reference.token().to_string())
+                {
+                    return true;
                 }
             }
             TypeInfo::String(_) | TypeInfo::Boolean(_) => {}
@@ -186,6 +189,21 @@ fn is_standard_type(token_reference: &TokenReference) -> Option<bool> {
 
 impl Visitor for CollectTypeExports {
     fn visit_block(&mut self, node: &Block) {
+        // Exported aliases also exist in the generated wrapper, so defaults may
+        // safely refer to them. Private aliases must still be removed.
+        let exported_types: HashSet<String> = node
+            .stmts()
+            .filter_map(|statement| match statement {
+                Stmt::ExportedTypeDeclaration(declaration) => Some(
+                    declaration
+                        .type_declaration()
+                        .type_name()
+                        .token()
+                        .to_string(),
+                ),
+                _ => None,
+            })
+            .collect();
         let export_statements = node.stmts().filter_map(|statement| match statement {
             Stmt::ExportedTypeDeclaration(declaration) => {
                 let declaration = declaration.type_declaration();
@@ -194,6 +212,16 @@ impl Visitor for CollectTypeExports {
                     declaration.generics()
                 {
                     let arrows = generics_declaration.arrows().clone();
+                    let mut accessible_types = exported_types.clone();
+                    for parameter in generics_declaration.generics().iter() {
+                        match parameter.parameter() {
+                            GenericParameterInfo::Name(name)
+                            | GenericParameterInfo::Variadic { name, .. } => {
+                                accessible_types.insert(name.token().to_string());
+                            }
+                            _ => {}
+                        }
+                    }
 
                     let generics = generics_declaration.generics().iter().map(|pair| {
                         let generic_value = match pair.parameter() {
@@ -219,6 +247,7 @@ impl Visitor for CollectTypeExports {
                         Some(generics_declaration.clone().with_generics(
                             remove_generics_foreign_default(
                                 generics_declaration.generics().clone(),
+                                &accessible_types,
                             ),
                         )),
                     )
@@ -368,6 +397,42 @@ fn get_stylua_config() -> Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exported_alias_default_is_preserved() {
+        let result = reexport(
+            "../module",
+            r#"
+export type Format = "email" | "uri"
+export type Text<F = Format> = { format: F }
+export type Nested<F = { Format? }> = { format: F }
+"#,
+        )
+        .unwrap();
+        assert!(result.contains("export type Text<F = Format> = module.Text<F>"));
+        assert!(result.contains("export type Nested<F = { Format? }> = module.Nested<F>"));
+        full_moon::parse(&result).unwrap();
+    }
+
+    #[test]
+    fn default_referencing_an_earlier_parameter_is_preserved() {
+        let result = reexport(
+            "../module",
+            "export type Pair<T, U = T> = { first: T, second: U }",
+        )
+        .unwrap();
+        assert!(result.contains("export type Pair<T, U = T> = module.Pair<T, U>"));
+    }
+
+    #[test]
+    fn private_default_is_removed_even_when_union_contains_builtins() {
+        let result = reexport(
+            "../module",
+            "type Hidden = number\nexport type Value<T = Hidden | string> = T",
+        )
+        .unwrap();
+        assert!(result.contains("export type Value<T> = module.Value<T>"));
+    }
 
     #[test]
     fn export_simple_type_name() {
