@@ -99,7 +99,12 @@ const extractEntryPoint = async (contentPath, parentPath, level = 1) => {
     if (
       RE_EXPORT_EXTENSIONS.some((extension) => entryPoint.endsWith(extension))
     ) {
-      reExportedEntryPoint = reexport(relativeRequirePath, entryPointContent)
+      reExportedEntryPoint = reexport(
+        path.posix.basename(relativeRequirePath).match(/^init\.(lua|luau)$/)
+          ? path.posix.dirname(relativeRequirePath)
+          : relativeRequirePath.replace(/\.(lua|luau)$/, ''),
+        entryPointContent
+      )
     } else if (
       SUPPORTED_EXTENSIONS.some((extension) => entryPoint.endsWith(extension))
     ) {

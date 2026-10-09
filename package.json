@@ -16,7 +16,7 @@
   },
   "scripts": {
     "prepare": "wasm-pack build luau-types-re-export --target nodejs --release && rm -f luau-types-re-export/pkg/.gitignore",
-    "test": "cargo test --manifest-path luau-types-re-export/Cargo.toml",
+    "test": "cargo test --manifest-path luau-types-re-export/Cargo.toml && node --test src/*.test.js",
     "lint": "biome lint main.js src/",
     "format": "biome format . --write",
     "style": "biome format .",

@@ -46,6 +46,16 @@ In your Luau project `package.json` file, add a `prepare` script to run `npmluau
 
 This utility will generate a folder named `.luau-aliases` inside `node_modules` after installing your dependencies that contains module links to each dependency.
 
+For Luau entries, generated imports omit `.lua` / `.luau`; an `init` entry
+imports its parent directory. For example, `main = "src/init.luau"` becomes a
+require of the package's `src` directory. Non-Luau entry paths are unchanged.
+Exported aliases used as generic defaults are preserved, as are defaults that
+refer to earlier generic parameters. Defaults involving private aliases or other
+unsupported references are still omitted.
+
+The current alias directory is shared by installed packages; conflicting nested
+versions are not resolved independently.
+
 **[Luau-lsp](https://github.com/JohnnyMorganz/luau-lsp)**:
 
 If you using the VS code extension, you can define a directory alias in your `.luaurc`:
